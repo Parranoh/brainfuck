@@ -142,6 +142,8 @@ exec p@(Loop l:p') r =
 
 main :: IO ()
 main = do
+    IO.hSetBuffering IO.stdin IO.NoBuffering
+    IO.hSetBuffering IO.stdout IO.NoBuffering
     files <- Env.getArgs
     M.when (length files /= 1) $ do
         putStrLn "Please provide exactly one file"
@@ -150,7 +152,7 @@ main = do
     let prgm = runParser parseProgram . preprocess $ code
     maybe
         (putStrLn "Syntax error" >> Exit.exitFailure)
-        (\(r,p) -> do
+        (\(r,p) ->
             if null r
                 then exec p init >> return ()
                 else putStrLn "Syntax error" >> Exit.exitFailure)
