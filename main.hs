@@ -1,5 +1,6 @@
 import Prelude hiding (Either (..),init)
 import qualified Prelude as P (Either (..),init)
+import qualified Data.List as L
 import qualified Control.Monad as M
 import qualified Control.Applicative as A
 import qualified System.Environment as Env
@@ -91,6 +92,8 @@ preprocess = filter (flip elem "+-<>,.[]")
 
 type Register = ([Int],Int,[Int])
 
+data EofBehavior = Zero | MinusOne | LeaveUnchanged
+
 init :: Register
 init = ([],0,[])
 
@@ -112,39 +115,44 @@ right :: Register -> Register
 right (l,i,[]) = (i:l,0,[])
 right (l,i,r:rs) = (i:l,r,rs)
 
-input :: Register -> IO Register
-input (l,_,r) = do
+input :: EofBehavior -> Register -> IO Register
+input eofBehavior reg@(l,i,r) = do
     eof <- IO.isEOF
     if eof
-        then return (l,0,r)
+        then return $ case eofBehavior of
+            MinusOne -> (l,255,r)
+            Zero -> (l,0,r)
+            LeaveUnchanged -> reg
         else do
             c <- getChar
-            return (l,fromEnum c,r)
+            let i = fromEnum c `mod` 255
+            return (l,i,r)
 
 output :: Register -> IO ()
 output (l,i,r) = putChar . toEnum $ i
 
-exec :: Program -> Register -> IO Register
-exec [] r = return r
-exec (Inc:p) r = exec p $ inc r
-exec (Dec:p) r = exec p $ dec r
-exec (Left:p) r = exec p $ left r
-exec (Right:p) r = exec p $ right r
-exec (Input:p) r = input r >>= exec p
-exec (Output:p) r = output r >> exec p r
-exec p@(Loop l:p') r =
-    if isZero r
-        then exec p' r
-        else do
-            r' <- exec l r
-            exec p r'
+exec :: EofBehavior -> Program -> Register -> IO Register
+exec eof = go where
+    go [] r = return r
+    go (Inc      : p)  r = go p $ inc r
+    go (Dec      : p)  r = go p $ dec r
+    go (Left     : p)  r = go p $ left r
+    go (Right    : p)  r = go p $ right r
+    go (Input    : p)  r = input eof r >>= go p
+    go (Output   : p)  r = output r >> go p r
+    go p@(Loop l : p') r =
+        if isZero r
+            then go p' r
+            else do
+                r' <- go l r
+                go p r'
 
 
 main :: IO ()
 main = do
-    IO.hSetBuffering IO.stdin IO.NoBuffering
-    IO.hSetBuffering IO.stdout IO.NoBuffering
-    files <- Env.getArgs
+    argv <- Env.getArgs
+    let (flags,files) = L.partition ((==) '-' . head) argv
+    M.when ("-b" `elem` flags) $ IO.hSetBuffering IO.stdin IO.NoBuffering
     M.when (length files /= 1) $ do
         putStrLn "Please provide exactly one file"
         Exit.exitFailure
@@ -154,6 +162,11 @@ main = do
         (putStrLn "Syntax error" >> Exit.exitFailure)
         (\(r,p) ->
             if null r
-                then exec p init >> return ()
+                then exec (eofBehavior flags) p init >> return ()
                 else putStrLn "Syntax error" >> Exit.exitFailure)
         prgm
+    where
+        eofBehavior flags
+            | "-n" `elem` flags = LeaveUnchanged
+            | "-1" `elem` flags = MinusOne
+            | otherwise         = Zero
